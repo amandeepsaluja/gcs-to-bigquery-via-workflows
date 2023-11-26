@@ -1,0 +1,51 @@
+main:
+  params: [event]
+  steps:
+    - log_event:
+        call: sys.log
+        args:
+          text: $${event}
+          severity: INFO
+
+    - extract_metadata:
+        assign:
+          - project: $${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - resource: $${event.resourceName}
+          - source_excel_bucket: $${text.split(resource, "/")[3]}
+          - source_excel_file: $${text.split(resource, "/objects/")[1]}
+          - target_csv_bucket: $${source_excel_bucket}
+          - target_csv_file: $${text.replace_all(source_excel_file, ".xlsx", ".csv")}
+          - job_source: "Workflows"
+
+    - trigger_xlsx_to_csv_cf:
+        call: http.post
+        args:
+          url: https://us-central1-gcp-practice-project-aman.cloudfunctions.net/xlsx-to-csv-function
+          headers:
+            Content-Type: application/json
+          body:
+            source_excel_bucket: $${source_excel_bucket}
+            source_excel_file: $${source_excel_file}
+            target_csv_bucket: $${target_csv_bucket}
+            target_csv_file: $${target_csv_file}
+            job_source: $${job_source}
+          auth:
+            type: OIDC
+
+    - load_to_bq:
+        call: googleapis.bigquery.v2.jobs.insert
+        args:
+          projectId: $${project}
+          body:
+            configuration:
+              load:
+                autodetect: true
+                destinationTable:
+                  projectId: $${project}
+                  datasetId: "raw_layer"
+                  tableId: "xlxs_to_csv_pipeline"
+                write_disposition: WRITE_APPEND
+                fieldDelimiter: ","
+                skipLeadingRows: 1
+                sourceFormat: "csv"
+                sourceUris: $${"gs://" + target_csv_bucket + "/" + target_csv_file}
